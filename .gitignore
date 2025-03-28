@@ -1,0 +1,8 @@
+
+build/
+
+.vscode
+
+Corpus/
+Output/
+temps/
