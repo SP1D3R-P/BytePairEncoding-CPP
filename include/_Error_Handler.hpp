@@ -4,21 +4,26 @@
 #ifndef LOG_LEVEL
 #define LOG_LEVEL 0
 #else
-#if LOG_LEVEL > 2
+#if LOG_LEVEL > 3
 #error "Log Level Can't Be Greater than 2"
-#endif //LOG_LEVEL
+#endif // LOG_LEVEL
 #endif // LOG_LEVEL
 
-#define Log(lv, msg, ...) do { \
-    if (lv >= LOG_LEVEL) \
-        fprintf(stdout, "%s :: " msg ".\n" , BPE::Error::m_l_cstr[lv] __VA_OPT__(,) __VA_ARGS__); \
-} while (0)
+#include <chrono>
+
+#define Log(lv, msg, ...)                                                                             \
+    do                                                                                                \
+    {                                                                                                 \
+        if (lv >= LOG_LEVEL)                                                                          \
+            fprintf(stdout, "%s :: " msg ".\n", BPE::_LogString[lv] __VA_OPT__(, ) __VA_ARGS__); \
+    } while (0)
 
 namespace BPE
 {
     enum Log_Level
     {
-        LOG_INFO = 0x0,
+        LOG_DEBUG = 0x0,
+        LOG_INFO,
         LOG_WARN,
         LOG_ERROR
     };
@@ -27,10 +32,10 @@ namespace BPE
     {
 
     public:
-        Error(Log_Level _l, const char *note, const char *file)
-            : m_what(note),
+        Error(std::string &&Type, const std::string &Desc, const char *file)
+            : m_what(Desc),
               m_file(file),
-              m_level(_l)
+              m_type(Type)
         {
         }
 
@@ -46,7 +51,7 @@ namespace BPE
         void log() const
         {
             fprintf(stdout, "%s:: %s : %s.\n",
-                    m_l_cstr[m_level],
+                    m_type.c_str(),
                     m_file.c_str(),
                     m_what.c_str());
         }
@@ -54,20 +59,39 @@ namespace BPE
     private:
         const std::string m_what;
         const std::string m_file;
-        Log_Level m_level;
-
-    public:
-        static const char *m_l_cstr[3];
+        const std::string m_type;
     };
 
-    const char *Error::m_l_cstr[3] = {
+    class TimeIt {
+        public:
+            using Clock = std::chrono::high_resolution_clock;
+        
+            // Constructor starts the timer with display control
+            TimeIt(const std::string& taskName = "Execution", bool shouldDisplay = true)
+                : taskName_(taskName), shouldDisplay_(shouldDisplay), startTime_(Clock::now()) {}
+        
+            // Destructor stops the timer and prints the duration if shouldDisplay is true
+            ~TimeIt() {
+                auto endTime = Clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime_).count();
+                if (shouldDisplay_) {
+                    std::cout << taskName_ << " took " << ((float)duration)/1000 << " sec.\n\n";
+                }
+            }
+        
+        private:
+            std::string taskName_;
+            bool shouldDisplay_;
+            std::chrono::time_point<Clock> startTime_;
+        };
+
+    static char *_LogString[4] = {
+        "DEBUG",
         "INFO ",
         "WARN ",
         "ERROR"};
 
-
-
-#define ERROR(level, what, ...) throw Error(LOG_##level, what, __FILE__)
-#define TODO(Func) ERROR(WARN, "Not Implementd :: " #Func, NULL)
+#define ERROR(T, what, ...) throw Error(#T, what, __FILE__)
+#define TODO(Func) Log(BPE::LOG_WARN, "File [ %s ] : Line [ %zu ] : Not Implementd :: "#Func,__FILE__,__LINE__) ; abort()
 
 } // namespace BPE

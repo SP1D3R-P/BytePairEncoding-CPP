@@ -28,16 +28,15 @@ namespace BPE
     class BPE_Table;
     
     template < typename T = Bytes, typename _Alloc = std::allocator<T>>
-    static std::vector<T, _Alloc> to_utf8_bytes(const std::string &input)
+    static std::vector<T, _Alloc>* to_utf8_bytes(const std::string &input , _Alloc allocator = _Alloc() )
     {
         icu::UnicodeString unicode_str = icu::UnicodeString::fromUTF8(input);
-    
-        _Alloc allocator;
     
         std::string utf8_str(allocator);
         unicode_str.toUTF8String(utf8_str);
     
-        return std::vector<T, _Alloc>(utf8_str.begin(), utf8_str.end(), allocator);
+        return new std::vector<T, _Alloc>(utf8_str.begin(), utf8_str.end(), allocator);
+        
     }
 
     static void str_tolower(std::string &_s)
@@ -108,13 +107,6 @@ namespace BPE
     public:
         BPE_Table(size_t TableSize) : m_TableSize(TableSize)  { m_Tokens.reserve(TableSize);}
         ~BPE_Table() {}
-
-        uint32_t getNextStartId() const
-        {
-            Log(LOG_WARN,"Curr = %zu , Max %zu ",m_CurrId,m_TableSize);
-            assert(m_CurrId < m_TableSize && "Trying To Fit More than the allocated Size.");
-            return m_CurrId;
-        }
         
         const Token& AddTokenMap(Token &T) 
         {
@@ -132,7 +124,6 @@ namespace BPE
 
         void Encode(const std::vector<uint32_t> &from , std::vector<uint32_t> &to )
         {
-            Log(LOG_INFO,"Inside Encode");
             // clear the memory
             to.clear();
             
@@ -183,6 +174,11 @@ namespace BPE
             for (uint32_t i = start; i < end; i++)
             {
                 auto Tok = m_Tokens[i];
+
+                char Buff[1024] = {0};
+                sprintf(Buff,"[%zu] => ",i);
+
+                Tok_str.append(Buff);
                 
                 EvalToken(Tok,Tok_str);
                 buff << Tok_str << "\n";
