@@ -58,17 +58,15 @@ namespace BPE
         /**
          * Requres [ a hash function ]
          * Compare Function if both are same or not
-         * token range (INT_MAX - 255)
+         * new token range (256 -INT32_MAX )
          */
 
     public:
         /**
          *  It's user Duty to not to create new && maintain it 
-         * same goes for creating duplicate Token 
          */
         Token(uint32_t x, uint32_t y)
-            : m_data{x,y},
-              m_id(++m_iter_curr_allot_id)
+            : m_data{x,y}
         {
         }
         Token(const Token &B) 
@@ -76,13 +74,6 @@ namespace BPE
             m_id(B.m_id)
         {}
         
-        // Token(Token &&B) = default;
-
-        static void reset_curr_iter_ids(uint32_t startFrom )
-        {
-            m_iter_curr_allot_id = startFrom;
-        }
-
         virtual bool operator == (const Token &B) const final  { return m_data[0] == B.m_data[0] && m_data[0] == B.m_data[0]; }
 
         virtual Token& operator =(const Token &B) {
@@ -95,20 +86,16 @@ namespace BPE
         uint32_t getId() const { return m_id;}
 
         const std::pair<uint32_t,uint32_t> getData() const {return {m_data[0],m_data[1]};}
+        static uint64_t __hash__(uint32_t data0 , uint32_t data1)  { return ((uint64_t)data0 << 0x20) | data1; }
     private:
-        virtual uint64_t __hash__() final { return ((uint64_t)m_data[0] << 32) | m_data[1]; }
-        static uint64_t __hash__(uint32_t data0 , uint32_t data1)  { return ((uint64_t)data0 << 32) | data1; }
+        virtual uint64_t __hash__() final { return ((uint64_t)m_data[0] << 0x20) | m_data[1]; }
 
     private:
         uint32_t m_data[2];
         uint32_t m_id;
 
-        static uint32_t m_iter_curr_allot_id ;
         friend class BPE_Table;
     };
-
-    // initialize the static variable 
-    uint32_t Token::m_iter_curr_allot_id = 256;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     /**
@@ -124,21 +111,28 @@ namespace BPE
 
         uint32_t getNextStartId() const
         {
-            assert(m_CurrId >= m_TableSize && "Trying To Fit More than the allocated Size.");
+            Log(LOG_WARN,"Curr = %zu , Max %zu ",m_CurrId,m_TableSize);
+            assert(m_CurrId < m_TableSize && "Trying To Fit More than the allocated Size.");
             return m_CurrId;
         }
         
-        void AddTokenMap(Token &T) 
+        const Token& AddTokenMap(Token &T) 
         {
-            assert(m_CurrId >= m_TableSize && "Trying To Fit More than the allocated Size.");
+            // Log(LOG_WARN,"Curr = %zu , Max %zu bool %d",m_CurrId,m_TableSize,m_CurrId >= m_TableSize);
+            assert(m_CurrId - 0x100 < m_TableSize && "Trying To Fit More than the allocated Size.");
             T.m_id = m_CurrId++; // set the token id 
-            m_TokenMap[T.__hash__()] = m_Tokens.size(); // update the map 
+
+            // As the New Tok Gen starts from 256
+            m_TokenMap[T.__hash__()] = m_Tokens.size() + 0x100; // update the map 
+            
             m_Tokens.push_back(T); // save the values 
+
+            return m_Tokens[m_Tokens.size()-1];
         }
 
         void Encode(const std::vector<uint32_t> &from , std::vector<uint32_t> &to )
         {
-            // Log(LOG_INFO,"Inside Encode");
+            Log(LOG_INFO,"Inside Encode");
             // clear the memory
             to.clear();
             
@@ -155,7 +149,7 @@ namespace BPE
                 // find the Token 
                 auto Tok_It = m_TokenMap.find(hash);
                 
-                if(Tok_It == m_TokenMap.end() ) // The Token Does not Preseten 
+                if(Tok_It == m_TokenMap.end() ) // The Token Does not Exists 
                 {
                     to.push_back(curr_word);
                     continue;
@@ -163,8 +157,8 @@ namespace BPE
                 
                 auto [Tok_hash,Tok_idx] = *Tok_It;
                 
-                // We Know Tok Id = Tok_idx + 256;
-                to.push_back(Tok_idx+0x100);
+                // We Know Tok Id = Tok_idx 
+                to.push_back(Tok_idx);
 
                 // jump the next word 
                 i+=1;
@@ -201,24 +195,32 @@ namespace BPE
             auto ch1 = Tok.m_data[0];
             auto ch2 = Tok.m_data[1];
 
+            /**
+             * if ch1 or ch2 > 0xff then they are not part of the inital ascii 
+             * to find them go to token ch1 or ch2 i.e m_Tokens[ch1 or ch2 - 0x100 ] as they are stored in the vector index 
+             */
+
             if(ch1 > 0xff ) 
                 // Evaluate Left Token
                 EvalToken(m_Tokens[ch1-0x100],Res);
                 else
                 // Append the Text
                 Res.append(1,(char)ch1);
-                if(ch2 > 0xff ) 
+            
+            if(ch2 > 0xff ) 
                 // Evaluate Right Token
                 EvalToken(m_Tokens[ch2-0x100],Res);
-                else
+            else
                 // Append the Text
                 Res.append(1,(char)ch2);
-        }
+    }
 
     private:
         std::unordered_map<uint64_t/*id*/,size_t/*index to the vector*/> m_TokenMap;
         std::vector<Token> m_Tokens;
-        int32_t m_CurrId = 256; // start at 256
+        int32_t m_CurrId = 0x100; // start at 256
         const size_t m_TableSize;
+
+        friend class BytePairEncoding;
     };
 }
