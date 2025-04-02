@@ -1,22 +1,36 @@
 
 #pragma once
 
-#include <vector>
-#include <algorithm>
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <unordered_set>
+# include <common.hpp>
+
 #include <_Token.hpp>
 #include <_Error_Handler.hpp>
-#include <_MemoryManagement.hpp>
+
+// GPT4 pattern 
+#define GPT4_REGEX_PATTERN_1 "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?"
+#define GPT4_REGEX_PATTERN_2 "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?"
+#define GPT4_REGEX_PATTERN_3 "[0-9]{1,3}"
+#define GPT4_REGEX_PATTERN_4 " ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*"
+#define GPT4_REGEX_PATTERN_5 "\\s*[\\r\\n]+"
+#define GPT4_REGEX_PATTERN_6 "\\s+(?!\\S)"
+#define GPT4_REGEX_PATTERN_7 "\\s+"
+#define GPT4_PATTERN { GPT4_REGEX_PATTERN_1"|" GPT4_REGEX_PATTERN_2"|" GPT4_REGEX_PATTERN_3"|" \
+    GPT4_REGEX_PATTERN_4"|" GPT4_REGEX_PATTERN_5"|" GPT4_REGEX_PATTERN_6"|" GPT4_REGEX_PATTERN_7 }
+
+// clk100k_BASE
+#define CL100K_BASE_PATTERN R"('(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s)"
 
 namespace BPE
 {
     class BytePairEncoding
     {
     public:
-        BytePairEncoding(size_t VocabSize = 200) : m_Vocab(VocabSize), m_Epoch(VocabSize) {}
+        BytePairEncoding(size_t VocabSize = 200) : m_Vocab(VocabSize), m_Epoch(VocabSize)
+        {
+
+            m_FromVect = new std::vector<uint32_t>();
+            m_ToVect = new std::vector<uint32_t>();
+        }
         ~BytePairEncoding()
         {
             delete m_ToVect;
@@ -49,8 +63,8 @@ namespace BPE
 
                 m_FileNames.insert(_f);
 
-                m_FromVect = BPE::to_utf8_bytes<uint32_t>(str);
-                m_ToVect = new std::vector<uint32_t>(m_FromVect->size());
+                if (!BPE::to_utf8_bytes<uint32_t>(str, *m_FromVect))
+                    throw -1;
             }
             catch (...)
             {
@@ -59,15 +73,16 @@ namespace BPE
 
             return *this;
         }
-
+#if USE_REGEX == true
         BytePairEncoding &Train(
             const size_t LogFreq = 200)
         {
-            if (m_FileNames.size() < 1)
+            if (m_FileNames.size() < 1 || m_FromVect->size() < 1)
             {
                 Log(LOG_ERROR, "Something went Wrong or No File is Loaded ");
                 return *this;
             }
+            m_ToVect->resize(m_FromVect->capacity());
 #if LOG_LEVEL < 1
             char TimmerBufferString[128] = {0};
             sprintf(TimmerBufferString, "Training for %zu Epoches ", LogFreq);
@@ -87,18 +102,21 @@ namespace BPE
 
 #endif // OPTIMIZED
 
+            TimeIt Timmer(TimmerBufferString);
+            Timmer.Start();
             Log(BPE::LOG_INFO, "Starting The Trainging Processes");
             for (size_t epoch = 0; epoch < m_Epoch; epoch++)
             {
+
 #if LOG_LEVEL < 1
                 auto ShouldLog = epoch % LogFreq == 0;
-                TimeIt Timmer(TimmerBufferString, ShouldLog);
 #endif                                                // LOG_LEVEL < 1
                 int file_id = m_FileNames.size() - 1; // Last File is already loaded
 
 #ifndef OPTIMIZED // un optimized Algo
-                do{// insert all the tokens from all the file 
-                    
+                do
+                { // insert all the tokens from all the file
+
                     // Insert the Token and Calculate the Frequency
                     for (size_t i = 0; i < FromToVect[epoch % 2].size() - 1; i++)
                     {
@@ -107,15 +125,15 @@ namespace BPE
                     }
                     --file_id;
                     /**
-                     * Load the all the From Files only 
+                     * Load the all the From Files only
                      */
-                    if(file_id > 0)
+                    if (file_id > 0)
                     {
-                        // load other file 
+                        // load next file
                     }
-                } while( file_id > 0 );
-                file_id = m_FileNames.size() - 1; // reset the file id count 
-#endif // UNOPTIMIZED
+                } while (file_id > 0);
+                file_id = m_FileNames.size() - 1; // reset the file id count
+#endif                                            // UNOPTIMIZED
                 /**
                  * Common Portion
                  */
@@ -127,11 +145,13 @@ namespace BPE
                                                    {
                                                        return A.second < B.second;
                                                    });
+                // unwrap it max freq
                 auto max_freq_tok = max_freq.first;
                 auto max_freq_fnum = max_freq.second;
-
+                // New Added Token
                 auto &AddedTok = m_Vocab.AddTokenMap(max_freq_tok); // insert the max token
 
+                // Termination Condition
                 if (max_freq_fnum < 2)
                 {
                     Log(LOG_WARN, "The Min Freq Has been Reached Terminating Training at %zu Epoch", epoch);
@@ -140,9 +160,10 @@ namespace BPE
                 do
                 {
 #ifndef OPTIMIZED
-
+                    // clear the map for next iter
                     m_TokenMap.clear();
 
+                    // Encode the string
                     m_Vocab.Encode(FromToVect[epoch % 2], FromToVect[(epoch + 1) % 2]);
 #endif
 #ifdef OPTIMIZED // Use Optimized Algorithm
@@ -163,7 +184,8 @@ namespace BPE
 
                     // clear the memory
 
-                    m_TokenMap.erase(max_freq_tok); // remove the max token from the temp Token Map
+                    // m_TokenMap.erase(max_freq_tok); // remove the max token from the temp Token Map
+                    max_freq.second = 0;
 
                     auto const &from = FromToVect[epoch % 2];
                     auto &to = FromToVect[(epoch + 1) % 2];
@@ -172,7 +194,7 @@ namespace BPE
 
                     size_t i; // counter
 
-                    // Encode Inplace
+                    // Encode Inplace [ could be done using same container but will be bit complex ]
                     for (i = 0; i < from.size() - 1; i++)
                     {
                         auto curr_word = from[i];
@@ -237,6 +259,7 @@ namespace BPE
                         }
                         else
                         {
+                            Log(LOG_ERROR, "UnReachable");
                             // We Know Tok Id = Tok_idx
                             to.push_back(Tok_idx); // Unreachable
                         }
@@ -256,26 +279,52 @@ namespace BPE
                         printf("--------------------------------------------------------------\n");
                         Log(LOG_INFO, "Epoch :: %zu tem_Tokens : %zu", epoch, m_TokenMap.size());
                         Log(LOG_INFO, "Context Len : %zu ", FromToVect[(epoch + 1) % 2].size());
+                        Timmer.End();
                         printf("--------------------------------------------------------------\n");
+
+                        Timmer.Start();
                     }
 #endif // LOG_LEVEL < 1
+       // Flusing Unused Tokens
+                    if (epoch % m_flush_rate == 0)
+                    {
+
+                        for (auto it = m_TokenMap.begin(); it != m_TokenMap.end();)
+                        {
+                            if (it->second == 0)
+                            { // Delete even keys
+                                it = m_TokenMap.erase(it);
+                            }
+                            else
+                            {
+                                // Only advance the iterator if no deletion occurs
+                                ++it;
+                            }
+                        }
+                    }
                     /**
                      * Load Different File
                      * and save the To [ file naming will be like acc_name_{epoch%2}]
                      */
                     --file_id;
-                    if(file_id > 0)
+                    if (file_id > 0)
                     {
-                        // load other file 
+                        // load other file
                     }
                 } while (file_id > 0);
 
             } // main for loop [ epoches ]
-            
-            // Remove the Processed Files From the Folder 
+
+            // Remove the Processed Files From the Folder
             m_FileNames.clear();
             return *this;
         }
+
+# else // USE_REGEX 
+        
+
+#endif
+
 
         std::vector<uint32_t> Encode(const std::string &&fp)
         {
@@ -303,6 +352,56 @@ namespace BPE
         std::vector<uint32_t> *m_FromVect;
         std::vector<uint32_t> *m_ToVect;
 
+        // how frequent to clear the m_TokenMap ;
+        size_t m_flush_rate = 200; // every 200 epoches
+
         std::unordered_set<std::string> m_FileNames;
+
+        const std::unordered_set<std::string> SpecialSymbol = {
+
+            // This Token will not merge
+
+            // end and begin of the prompt or text input
+            "<|endoftext|>",   // EOS
+            "<|startoftext|>", // SOS
+
+#ifdef USE_CHAT_BASE
+            // start and end of an message  [ use case for user and assistant text ]
+            "<|im_start|>",
+            "<|im_end|>",
+#endif // USE_CHAT_BASE
+
+            // unkown token
+            "<|unk|>",
+
+            // separtor between inputs
+            "<|sep|>",
+#ifdef USE_CHAT_BASE
+            // to specify whether the following text belongs to the assistant or the use
+            "<|usr|>",
+            "<|assistant|>",
+#endif // USE_CHAT_BASE
+
+            // padding for meeting the token count
+            "<|padding|>",
+
+            // white spaces
+            "<|blank|>",
+
+#ifdef USE_REPEAT_BITS
+            // Repeat only for special char
+            "<|repeat-1|>",
+            "<|repeat-2|>",
+            "<|repeat-3|>",
+            "<|repeat-4|>",
+            "<|repeat-5|>",
+            "<|repeat-6|>",
+            "<|repeat-7|>",
+            "<|repeat-8|>",
+            "<|repeat-9|>",
+#endif // USE_REAPEAT_BITS
+        };
+
+        // const std::string GPT_STR = GPT4_PATTERN;
     };
 }

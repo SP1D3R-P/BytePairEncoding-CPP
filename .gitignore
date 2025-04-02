@@ -1,8 +1,27 @@
 
+# build folder 
 build/
+Build/
 
 .vscode
 
+# enviroment 
+env/
+
+# dataset 
+# add this latter 
 Corpus/
+
+# for now 
+extern/ 
+
+# generated file 
+
 Output/
 temps/
+
+# temp file 
+a.cc
+a.out
+*.so
+__pycache__/
