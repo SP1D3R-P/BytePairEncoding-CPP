@@ -12,9 +12,6 @@ env/
 # add this latter 
 Corpus/
 
-# for now 
-extern/ 
-
 # generated file 
 
 Output/

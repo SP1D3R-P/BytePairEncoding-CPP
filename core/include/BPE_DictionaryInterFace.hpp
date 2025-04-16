@@ -1,14 +1,16 @@
 
 #pragma once
 
-
-#include <unordered_map>
-
 namespace BPE
 {
     template <typename KV, typename V, typename HASH>
     class Dictionary;
-
+    /**
+     * This class Defines How a Dictory Key class should behave 
+     * All the Key Class of Dictiary Should Inherit this class
+     * @param
+     *      Derived : is the Derived Class  
+     */
     template <typename Derived>
     class DictionaryKeyInterface
     {
@@ -17,31 +19,23 @@ namespace BPE
         virtual ~DictionaryKeyInterface() {}
 
         /**
-         * All Assign Operators
+         * All Required methods 
          */
 
         virtual Derived &operator=(const Derived &B) = 0;
+        virtual bool operator==(const Derived &B) const = 0;
 
         /**
-         * All Compare Operators
+         * This a hidden class which will be used for hasing 
          */
-        virtual bool operator==(const Derived &B) const
-        {
-            (void)B;
-            return true;
-        }
-
         struct HashFunction
         {
-            virtual uint64_t operator()(const Derived &B) const final
-            {
-                return ((DictionaryKeyInterface *)(&B))->__hash__();
-            }
+            virtual uint64_t operator()(const Derived &B) const final{ return ((DictionaryKeyInterface *)(&B))->__hash__(); }
         };
 
     private:
         /**
-         * Hash Function 
+         * Hash Function ( that will be used for the hashing the key)
          */
         virtual uint64_t __hash__() = 0;
 
@@ -52,16 +46,15 @@ namespace BPE
     template <typename KV, typename V, typename HASH = typename DictionaryKeyInterface<KV>::HashFunction>
     class Dictionary : public std::unordered_map<KV, V, HASH>
     {
-
     public:
         Dictionary()
         {
+            /**
+             * Making sure the Key Class is of Proper Inheritance
+             */
             static_assert(std::is_base_of<DictionaryKeyInterface<KV>, KV>::value == true,
                           "ERROR :: Key Type(Class) Must be Inherited from DictKeyInterface");
-
-            // hash_function
         }
-
-        ~Dictionary() {}
+        virtual ~Dictionary() {}
     };
 }

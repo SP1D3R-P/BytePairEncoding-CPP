@@ -1,3 +1,3 @@
+__all__ = ['_core']
 
-
-# import core.module as module
+from . import _core

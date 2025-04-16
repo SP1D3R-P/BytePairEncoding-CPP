@@ -1,146 +1,162 @@
 
 #pragma once
 
-# include <common.hpp>
+#include <BPE_Tokens.hpp>
 
-#include <_Token.hpp>
-#include <_Error_Handler.hpp>
-
-// GPT4 pattern 
-#define GPT4_REGEX_PATTERN_1 "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?"
-#define GPT4_REGEX_PATTERN_2 "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?"
-#define GPT4_REGEX_PATTERN_3 "[0-9]{1,3}"
-#define GPT4_REGEX_PATTERN_4 " ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*"
-#define GPT4_REGEX_PATTERN_5 "\\s*[\\r\\n]+"
-#define GPT4_REGEX_PATTERN_6 "\\s+(?!\\S)"
-#define GPT4_REGEX_PATTERN_7 "\\s+"
-#define GPT4_PATTERN { GPT4_REGEX_PATTERN_1"|" GPT4_REGEX_PATTERN_2"|" GPT4_REGEX_PATTERN_3"|" \
-    GPT4_REGEX_PATTERN_4"|" GPT4_REGEX_PATTERN_5"|" GPT4_REGEX_PATTERN_6"|" GPT4_REGEX_PATTERN_7 }
-
-// clk100k_BASE
-#define CL100K_BASE_PATTERN R"('(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+| ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s)"
 
 namespace BPE
 {
-    class BytePairEncoding
+
+    namespace py = pybind11;
+    
+    /*******************************************************************************************************************************/
+
+    /**
+     * First Divide The Words Into Several Cuncks to Divide using the pattern 
+     * Then use BPE logic to create the BPE tree 
+     */
+    class PyBytePairEncoding
     {
+        typedef std::pair<std::vector<uint32_t> *, uint32_t> Word_Vect_T;
+        typedef std::vector<std::pair<std::vector<uint32_t> *, uint32_t>> Sent_Vect_T;
+
+        using Freq_T = uint32_t;
+
     public:
-        BytePairEncoding(size_t VocabSize = 200) : m_Vocab(VocabSize), m_Epoch(VocabSize)
-        {
-
-            m_FromVect = new std::vector<uint32_t>();
-            m_ToVect = new std::vector<uint32_t>();
-        }
-        ~BytePairEncoding()
-        {
-            delete m_ToVect;
-            delete m_FromVect;
-        }
-
-        BytePairEncoding &Compile(std::string &&_f, bool ConvertLower = true)
+        PYBIND11_NOINLINE PyBytePairEncoding(
+            size_t vocabSize,
+            pybind11::str pattern = GPT4_PATTERN) __THROW
+            : m_bpe_table(vocabSize),
+              m_vocab_size(vocabSize)
         {
             try
             {
-
-                std::ifstream in(_f, std::ostream::in);
-
-                Log(BPE::LOG_INFO, "Loading File...");
-
-                std::stringstream Buff_Str;
-                Buff_Str << in.rdbuf();
-                std::string str;
-                str = Buff_Str.str();
-
-                Log(BPE::LOG_INFO, "File Size : %ld", str.length());
-
-                Log(BPE::LOG_INFO, "Converting to Lower Case");
-                // convert to all lower case english letter for easy use
-                BPE::str_tolower(str);
-
-                Log(BPE::LOG_INFO, "Converting to UF8");
-                // convert to bytes of utf8
-                // This Two Vector will pass Each other
-
-                m_FileNames.insert(_f);
-
-                if (!BPE::to_utf8_bytes<uint32_t>(str, *m_FromVect))
-                    throw -1;
+                m_regex_module = pybind11::module_::import("regex");
             }
             catch (...)
             {
-                Log(LOG_ERROR, "Can't Read File %s, Something went wrong ", _f.c_str());
+                pybind11::import_error(R"(Can't Import `Regex`. `Regex` module is required to work porperly.)");
             }
-
-            return *this;
+            m_regex_pattern_compiled = m_regex_module.attr("compile")(pattern);
         }
-#if USE_REGEX == true
-        BytePairEncoding &Train(
-            const size_t LogFreq = 200)
+
+        PYBIND11_NOINLINE virtual ~PyBytePairEncoding()
         {
-            if (m_FileNames.size() < 1 || m_FromVect->size() < 1)
+            clearCompileObject();
+        }
+
+        /**
+         *	compile method
+         *		compile the file into a vector format for futher processing
+         *	@param
+         *		inputString : the string to be compiled
+         *		fName : the file name
+         */
+        PYBIND11_NOINLINE virtual void compile(pybind11::str inputString, pybind11::str fName) noexcept(true) final 
+        {
+            Sent_Vect_T *sent_vect; // final vector of utf-8 words of the string sentence
+            // to delete the sent vect
+            auto clear_sent = [](Sent_Vect_T *ptr) -> void
             {
-                Log(LOG_ERROR, "Something went Wrong or No File is Loaded ");
-                return *this;
-            }
-            m_ToVect->resize(m_FromVect->capacity());
-#if LOG_LEVEL < 1
-            char TimmerBufferString[128] = {0};
-            sprintf(TimmerBufferString, "Training for %zu Epoches ", LogFreq);
-#endif // LOG_LEVEL < 1
-            std::array<std::vector<uint32_t>, 2> FromToVect{*m_FromVect, *m_ToVect};
-#ifdef OPTIMIZED
-            /**
-             * Calculate the Frequence Table  for the first time
-             */
-
-            // Insert the Token and Calculate the Frequency
-            for (size_t i = 0; i < FromToVect[0].size() - 1; i++)
+                for (auto &[i,j] : *ptr)
+                    // remove the the words
+                    delete i;
+                // remove the sent_vect
+                delete ptr;
+                return;
+            };
+            try
             {
-                BPE::Token T(FromToVect[0][i], FromToVect[0][i + 1]);
-                m_TokenMap[T]++;
-            }
+                // tokenizes the sentence to chunks of words
+                py::list tokenize_words = m_regex_pattern_compiled.attr("findall")(inputString);
+                uint32_t word_count /*number of word chunks*/ =
+                    tokenize_words.attr("__len__")().cast<uint32_t>();
 
-#endif // OPTIMIZED
+                // create new sentence and revese the required amount of space
+                sent_vect = new Sent_Vect_T();
+                sent_vect->reserve(word_count);
 
-            TimeIt Timmer(TimmerBufferString);
-            Timmer.Start();
-            Log(BPE::LOG_INFO, "Starting The Trainging Processes");
-            for (size_t epoch = 0; epoch < m_Epoch; epoch++)
-            {
+                
 
-#if LOG_LEVEL < 1
-                auto ShouldLog = epoch % LogFreq == 0;
-#endif                                                // LOG_LEVEL < 1
-                int file_id = m_FileNames.size() - 1; // Last File is already loaded
-
-#ifndef OPTIMIZED // un optimized Algo
-                do
-                { // insert all the tokens from all the file
-
-                    // Insert the Token and Calculate the Frequency
-                    for (size_t i = 0; i < FromToVect[epoch % 2].size() - 1; i++)
+                // insert the word vect to the sentence vect
+                for (auto words : tokenize_words)
+                {
+                    std::string_view string_words;
+                    std::vector<uint32_t> *BufferVect = new std::vector<uint32_t>();
+                    try
                     {
-                        BPE::Token T(FromToVect[epoch % 2][i], FromToVect[epoch % 2][i + 1]);
-                        m_TokenMap[T]++;
+                        string_words = words.cast<std::string_view>(); // This can thow Error Too
+                        // convert to utf8
+                        if (!BPE::to_utf8_bytes<uint32_t>(string_words, *BufferVect))
+                            throw py::value_error();
+                        sent_vect->push_back({BufferVect, BufferVect->size()});
                     }
-                    --file_id;
+                    catch (py::value_error e) // Error Occured when converting to utf-8
+                    {
+                        Log(LOG_ERROR, "Can't Convert to utf8.");
+                        delete BufferVect;
+                        clear_sent(sent_vect);
+                    }
+                    catch (py::cast_error e) // Error Occured when converting to string_view from string
+                    {
+                        // very unlikely to happen
+                        Log(LOG_ERROR, "Can't Convert to string_view from string.");
+                        delete BufferVect;
+                        clear_sent(sent_vect);
+                    }
+                }
+                // saving the compiled word
+                m_compiled_object[fName.cast<std::string_view>()] = sent_vect;
+            }
+            catch (...)
+            {
+                auto file_name = fName.cast<std::string_view>();
+                Log(LOG_ERROR, "Unkown Error Occured while compiling %s.", file_name.data());
+                // clearing the word
+                clear_sent(sent_vect);
+            }
+        }
+
+        /**
+         * 	train method
+         *		train the Encoder on compiled vector for given number of epoch [vocab count]
+         * 	@param
+         *      None  
+         *
+         */
+        PYBIND11_NOINLINE virtual void train()
+        {
+            std::mutex batch_task_mutex;
+            std::condition_variable batch_task_cond_var;
+            uint32_t n_batch_finished;
+
+            /*poolig the thread*/
+            boost::asio::thread_pool pool(std::thread::hardware_concurrency());
+
+            for (auto &[id, values] : m_compiled_object)
+            {
+                for (auto &[from, size] : *values)
+                {
                     /**
-                     * Load the all the From Files only
+                     * Calculate the Frequence Table  for the first time
                      */
-                    if (file_id > 0)
+                    auto &From = *from;
+                    // Insert the Token and Calculate the Frequency
+                    for (size_t i = 0; i < size - 1; i++)
                     {
-                        // load next file
+                        BPE::Token T(From[i], From[i + 1]);
+                        m_curr_token_map[T]++;
                     }
-                } while (file_id > 0);
-                file_id = m_FileNames.size() - 1; // reset the file id count
-#endif                                            // UNOPTIMIZED
-                /**
-                 * Common Portion
-                 */
+                }
+            }
 
-                // Get The Max Freq Element
-                auto &max_freq = *std::max_element(m_TokenMap.begin(),
-                                                   m_TokenMap.end(),
+            for (size_t epoch = 0; epoch < m_vocab_size - 0x100; epoch++)
+            {
+                /**
+                 * Non-parallelizable work
+                 */
+                auto &max_freq = *std::max_element(m_curr_token_map.begin(),
+                                                   m_curr_token_map.end(),
                                                    [](const std::pair<BPE::Token, uint32_t> &A, const std::pair<BPE::Token, uint32_t> &B) -> bool
                                                    {
                                                        return A.second < B.second;
@@ -148,216 +164,269 @@ namespace BPE
                 // unwrap it max freq
                 auto max_freq_tok = max_freq.first;
                 auto max_freq_fnum = max_freq.second;
-                // New Added Token
-                auto &AddedTok = m_Vocab.AddTokenMap(max_freq_tok); // insert the max token
 
                 // Termination Condition
                 if (max_freq_fnum < 2)
                 {
-                    Log(LOG_WARN, "The Min Freq Has been Reached Terminating Training at %zu Epoch", epoch);
-                    return *this;
+                    Log(LOG_WARN, "The Min frequency Has been Reached Terminating Training at %zu Epoch", epoch);
+                    break;
                 }
-                do
+                // New Added Token
+                auto &added_tok = m_bpe_table.addToken(max_freq_tok); // insert the max token
+
+                /**
+                 *
+                 * Implementing inplace freq update
+                 *    __
+                 * [ abcbd ]
+                 *
+                 * let max token be [ bc ]
+                 *
+                 * [ aX Xb d ]
+                 *
+                 * remove [b,c] token from the map
+                 * now add new token [ aX , Xb ]
+                 */
+
+                // parallelized task
+                std::function update_encode = [
+                    this, added_tok
+                ](
+                    Sent_Vect_T *vec , 
+                    std::condition_variable &cond_var, 
+                    std::mutex &mutex ,
+                    uint32_t &counter
+                ) -> void
                 {
-#ifndef OPTIMIZED
-                    // clear the map for next iter
-                    m_TokenMap.clear();
+                    for (auto &[From, size] : *vec)
+                    {
+                        std::vector<uint32_t> &from = *From;
+                        encodeInplace(from, size, added_tok);
 
-                    // Encode the string
-                    m_Vocab.Encode(FromToVect[epoch % 2], FromToVect[(epoch + 1) % 2]);
-#endif
-#ifdef OPTIMIZED // Use Optimized Algorithm
+                    } // For Total String
+                    {
+                        std::scoped_lock lock(mutex);
+                        counter++;
+                    }
+                    cond_var.notify_one();
+                };
 
+                n_batch_finished = 0;
+                for (auto &[id, values] : m_compiled_object)
+                {
                     /**
-                     *
-                     * Implementing inplace
-                     *  __
-                     * abcbd
-                     *
-                     * let max token be bc
-                     *
-                     * aX Xb d
-                     *
-                     * remove [b,c] token from the map
-                     * now add new token aX , Xb
+                     * parallelizable part
                      */
+                    boost::asio::post(pool,
+                        std::bind(
+                                      [update_encode, &values](
+                                        std::condition_variable &batch_task_cond_var, 
+                                        std::mutex &batch_task_mutex ,
+                                        uint32_t &n_batch_finished
+                                      ) -> void
+                                      {
+                                          update_encode(values,batch_task_cond_var,batch_task_mutex,n_batch_finished);
+                                      },
+                                      std::ref(batch_task_cond_var),
+                                      std::ref(batch_task_mutex),
+                                      std::ref(n_batch_finished)
+                                )
+                    );
 
-                    // clear the memory
-
-                    // m_TokenMap.erase(max_freq_tok); // remove the max token from the temp Token Map
-                    max_freq.second = 0;
-
-                    auto const &from = FromToVect[epoch % 2];
-                    auto &to = FromToVect[(epoch + 1) % 2];
-
-                    to.clear();
-
-                    size_t i; // counter
-
-                    // Encode Inplace [ could be done using same container but will be bit complex ]
-                    for (i = 0; i < from.size() - 1; i++)
-                    {
-                        auto curr_word = from[i];
-                        auto next_word = from[i + 1];
-
-                        // calculating hash
-                        auto hash = Token::__hash__(curr_word, next_word);
-
-                        // find the Token
-                        auto Tok_It = m_Vocab.m_TokenMap.find(hash);
-
-                        if (Tok_It == m_Vocab.m_TokenMap.end()) // The Token Does not Present
-                        {
-                            to.push_back(curr_word);
-                            continue;
-                        }
-
-                        const auto [Tok_hash, Tok_idx] = *Tok_It;
-
-                        // check this token is the curr max token
-                        if (Tok_idx == AddedTok.getId())
-                        {
-                            auto gen_TokenLen = to.size();
-
-                            if (gen_TokenLen > 0) // is there any token before
-                            {
-                                auto &prev_gen_word = to[gen_TokenLen - 1];
-                                auto &nextToken = m_Vocab.m_Tokens[Tok_idx - 0x100];
-
-                                /**
-                                 * For ababd
-                                 * max freq ab
-                                 * X <-
-                                 * Xa freq ++
-                                 * XX <-
-                                 * Xa freq -- and Xd freq ++
-                                 * d <-
-                                 * done
-                                 */
-
-                                auto prevTokenPair = Token(prev_gen_word, curr_word);
-                                // New Token
-                                Token nT(prev_gen_word, Tok_idx);
-
-                                m_TokenMap[prevTokenPair]--;
-                                m_TokenMap[nT]++; // Increase the Count of the Freq new type
-                            }
-
-                            // Add The Max Pair
-                            to.push_back(Tok_idx);
-
-                            // if there is Next token Then do
-                            if ((i + 2) < from.size())
-                            {
-                                Token PrevFutureToken(next_word, from[i + 2]);
-                                Token CurrentFutureToken(Tok_idx, from[i + 2]);
-
-                                m_TokenMap[PrevFutureToken]--;
-
-                                m_TokenMap[CurrentFutureToken]++;
-                            }
-                        }
-                        else
-                        {
-                            Log(LOG_ERROR, "UnReachable");
-                            // We Know Tok Id = Tok_idx
-                            to.push_back(Tok_idx); // Unreachable
-                        }
-                        // jump the next word
-                        i += 1;
-                    }
-
-                    if (i < from.size())
-                        to.push_back(from[i]);
-
-#endif // OPTIMIZED
-
-#if LOG_LEVEL < 1
-                    if (ShouldLog)
-                    {
-                        printf("\n\n");
-                        printf("--------------------------------------------------------------\n");
-                        Log(LOG_INFO, "Epoch :: %zu tem_Tokens : %zu", epoch, m_TokenMap.size());
-                        Log(LOG_INFO, "Context Len : %zu ", FromToVect[(epoch + 1) % 2].size());
-                        Timmer.End();
-                        printf("--------------------------------------------------------------\n");
-
-                        Timmer.Start();
-                    }
-#endif // LOG_LEVEL < 1
-       // Flusing Unused Tokens
-                    if (epoch % m_flush_rate == 0)
-                    {
-
-                        for (auto it = m_TokenMap.begin(); it != m_TokenMap.end();)
-                        {
-                            if (it->second == 0)
-                            { // Delete even keys
-                                it = m_TokenMap.erase(it);
-                            }
-                            else
-                            {
-                                // Only advance the iterator if no deletion occurs
-                                ++it;
-                            }
-                        }
-                    }
-                    /**
-                     * Load Different File
-                     * and save the To [ file naming will be like acc_name_{epoch%2}]
-                     */
-                    --file_id;
-                    if (file_id > 0)
-                    {
-                        // load other file
-                    }
-                } while (file_id > 0);
-
-            } // main for loop [ epoches ]
-
-            // Remove the Processed Files From the Folder
-            m_FileNames.clear();
-            return *this;
-        }
-
-# else // USE_REGEX 
-        
-
-#endif
+                } // For Each Compiled Sentence
 
 
-        std::vector<uint32_t> Encode(const std::string &&fp)
+                {
+                    std::unique_lock lock(batch_task_mutex);
+                    batch_task_cond_var.wait(lock, [this,&n_batch_finished]() -> bool
+                                            {
+                                                return n_batch_finished == m_compiled_object.size(); 
+                                            });
+                }
+
+                /* Dump the table and clear the table */
+                if (epoch % 100 == 0)
+                {
+                    for (auto it = m_curr_token_map.begin(); it != m_curr_token_map.end();)
+                        it = it->second /*freq*/ == 0 ? m_curr_token_map.erase(it) : ++it;
+
+                    /*save the bpe_table*/
+                }
+
+            } // Epoch
+
+            // join the threads [ no need for the pool ]
+            pool.join();
+
+            // clear the compile objects
+            clearCompileObject();
+
+        } // train
+
+        /**
+        *   encode
+        *       Tokenize and Encode the given string 
+        *   @param
+        *       input_string : the string to be encoded 
+        *   @returns 
+        *       numpy array [py::array_t<uint32_t>]
+        */
+        PYBIND11_NOINLINE virtual py::array_t<uint32_t> encode(py::str input_string) const final  
         {
-            Log(LOG_INFO, "Encoding File ... %s", fp.c_str());
-            TODO(BytePairEncoding::Encode);
-        }
+        } // encode 
 
-        std::vector<uint32_t> Decode(const std::string &&fp)
+        /**
+        *   decode
+        *       Decode the given encoded string to  original form 
+        *   @param 
+        *       encoded_text : encoded string to convert 
+        */
+        PYBIND11_NOINLINE virtual py::str decode(py::array_t<uint32_t> encoded_text)  const final  
         {
-            Log(LOG_INFO, "Decoding File ... %s", fp.c_str());
-            TODO(BytePairEncoding::Decode);
-        }
+        } // decode 
 
-        void Save()
+        /**
+        *   save
+        *       Dumps the Table to the file for future reference
+        *   @param 
+        *       dest : destiation file 
+        *   @returns 
+        *       bool : if the file is saved or not 
+        */
+        PYBIND11_NOINLINE virtual bool save(py::str dest) const final  
         {
-            TODO(BytePairEncoding::Save);
+
+        } // save 
+
+        PYBIND11_NOINLINE virtual void displayTable() const final  
+        {
+            //m_bpe_table.printToken();
+        } // displayTable 
+
+    protected:
+        PYBIND11_NOINLINE virtual void encodeInplace(
+            std::vector<uint32_t> &from,
+            uint32_t &size,
+            const Token &added_tok) noexcept(true) final
+        {
+            size_t i; // counter
+
+            uint32_t final_size = 0;
+
+            // Encode Inplace [ could be done using same container but will be bit complex ]
+            for (i = 0; i < size - 1; i++)
+            {
+                auto curr_word = from[i];
+                auto next_word = from[i + 1];
+
+                // calculating hash
+                auto tok_hash = Token::__hash__(curr_word, next_word);
+
+                // find the Token
+                auto token_it = m_bpe_table.m_token_map.find(tok_hash);
+
+                if (token_it == m_bpe_table.m_token_map.end()) // The Token Does not Present
+                {
+                    from[final_size++] = curr_word;
+                    continue;
+                }
+
+                const auto [_, token_index] = *token_it;
+
+                // check this token is the curr max token
+                if (token_index == added_tok.getId())
+                {
+                    if (final_size > 0) // is there any token before
+                    {
+                        auto &prev_gen_word = from[final_size - 1];
+                        /**
+                         * For ababd
+                         * max freq ab
+                         * X <-
+                         * Xa freq ++
+                         * XX <-
+                         * Xa freq -- and Xd freq ++
+                         * d <-
+                         * done
+                         */
+
+                        auto prev_token_pair = Token(prev_gen_word, curr_word);
+                        // New Token
+                        Token next_token_pair(prev_gen_word, token_index);
+                        {
+                            boost::mutex::scoped_lock lock(m_curr_token_mutex);
+                            m_curr_token_map[prev_token_pair]--;
+                            m_curr_token_map[next_token_pair]++; // Increase the Count of the Freq new type
+                        }
+                    }
+
+                    // Add The Max Pair
+                    {
+                        boost::mutex::scoped_lock lock(m_curr_token_mutex);
+                        m_curr_token_map[added_tok]--;
+                    }
+                    from[final_size++] = token_index;
+
+                    // if there is Next token Then do
+                    if ((i + 2) < size)
+                    {
+                        Token prev_future_token(next_word, from[i + 2]);
+                        Token current_future_token(token_index, from[i + 2]);
+                        {
+                            boost::mutex::scoped_lock lock(m_curr_token_mutex);
+                            m_curr_token_map[prev_future_token]--;
+                            m_curr_token_map[current_future_token]++;
+                        }
+                    }
+                }
+                else
+                {
+                    Log(LOG_ERROR, "Unreachable Code. If you Reached Here Somthing is Wrong with it.");
+                    from[final_size++] = token_index;
+                }
+                // jump the next word
+                i += 1;
+            }
+
+            if (i < size)
+                from[final_size++] = from[i];
+
+            size = final_size;
         }
 
-        BPE::BPE_Table &getBpeTable() { return m_Vocab; }
+        /**
+        *   clearCompileObject
+        *       Clear all the Compile object from the list
+        *   ERROR::  
+        *       Might Throw if there is any dangling pointer 
+        */
+        PYBIND11_NOINLINE virtual void clearCompileObject() __THROW final
+        {
+            for (auto &[k, v] : m_compiled_object)
+            {
+                for (auto &[p1, p2] : *v)
+                {
+                    delete p1;
+                }
+                delete v;
+            }
+            m_compiled_object.clear();
+        }
 
     private:
-        BPE::BPE_Table m_Vocab;
-        BPE::Dictionary<BPE::Token, uint32_t> m_TokenMap;
-        const size_t m_Epoch;
-        std::vector<uint32_t> *m_FromVect;
-        std::vector<uint32_t> *m_ToVect;
+        pybind11::module_ m_regex_module;
+        pybind11::object m_regex_pattern_compiled;
+        boost::unordered_map<std::string_view, Sent_Vect_T *> m_compiled_object;
+        BPE::BPE_Table m_bpe_table;
+        BPE::Dictionary<BPE::Token, Freq_T> m_curr_token_map;
+        boost::mutex m_curr_token_mutex;
 
-        // how frequent to clear the m_TokenMap ;
-        size_t m_flush_rate = 200; // every 200 epoches
+        size_t m_vocab_size;
 
-        std::unordered_set<std::string> m_FileNames;
-
-        const std::unordered_set<std::string> SpecialSymbol = {
+        const std::unordered_set<std::string> m_special_symbol = {
+            /**
+             * Use Somthing to Remove them
+             */
 
             // This Token will not merge
 
@@ -365,30 +434,23 @@ namespace BPE
             "<|endoftext|>",   // EOS
             "<|startoftext|>", // SOS
 
-#ifdef USE_CHAT_BASE
             // start and end of an message  [ use case for user and assistant text ]
             "<|im_start|>",
             "<|im_end|>",
-#endif // USE_CHAT_BASE
 
             // unkown token
             "<|unk|>",
 
             // separtor between inputs
             "<|sep|>",
-#ifdef USE_CHAT_BASE
+
             // to specify whether the following text belongs to the assistant or the use
             "<|usr|>",
             "<|assistant|>",
-#endif // USE_CHAT_BASE
 
             // padding for meeting the token count
             "<|padding|>",
 
-            // white spaces
-            "<|blank|>",
-
-#ifdef USE_REPEAT_BITS
             // Repeat only for special char
             "<|repeat-1|>",
             "<|repeat-2|>",
@@ -399,9 +461,10 @@ namespace BPE
             "<|repeat-7|>",
             "<|repeat-8|>",
             "<|repeat-9|>",
-#endif // USE_REAPEAT_BITS
+
         };
 
         // const std::string GPT_STR = GPT4_PATTERN;
     };
+
 }
