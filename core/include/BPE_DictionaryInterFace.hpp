@@ -37,7 +37,7 @@ namespace BPE
         /**
          * Hash Function ( that will be used for the hashing the key)
          */
-        virtual uint64_t __hash__() = 0;
+        virtual uint64_t __hash__() const = 0;
 
         template <typename KV, typename V, typename HASH>
         friend class BPE::Dictionary;

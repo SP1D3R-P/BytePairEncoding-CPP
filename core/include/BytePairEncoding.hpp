@@ -2,7 +2,7 @@
 #pragma once
 
 #include <BPE_Tokens.hpp>
-
+# include <fstream>
 
 namespace BPE
 {
@@ -190,7 +190,7 @@ namespace BPE
 
                 // parallelized task
                 std::function update_encode = [
-                    this, added_tok
+                    this, &added_tok
                 ](
                     Sent_Vect_T *vec , 
                     std::condition_variable &cond_var, 
@@ -273,6 +273,44 @@ namespace BPE
         */
         PYBIND11_NOINLINE virtual py::array_t<uint32_t> encode(py::str input_string) const final  
         {
+            std::string_view string_words;
+            std::vector<uint32_t> *BufferVect = new std::vector<uint32_t>();
+            try
+            {
+                string_words = input_string.cast<std::string_view>(); // This can thow Error Too
+                // convert to utf8
+                if (!BPE::to_utf8_bytes<uint32_t>(string_words, *BufferVect))
+                    throw -1;
+            }
+            catch (int e) // Error Occured when converting to utf-8
+            {
+                Log(LOG_ERROR, "Can't Convert to utf8.");
+                delete BufferVect;
+                throw py::value_error("Bad String.");
+            }
+            catch (py::cast_error e) // Error Occured when converting to string_view from string
+            {
+                // very unlikely to happen
+                Log(LOG_ERROR, "Can't Convert to string_view from string.");
+                delete BufferVect;
+                throw e;
+            }
+
+            size_t size = m_bpe_table.encode(*BufferVect);
+
+            uint32_t *result_vector = new uint32_t[size];
+            memcpy(result_vector,BufferVect->data(),size * sizeof result_vector[0]);
+
+            py::capsule encoded_capsule(result_vector,[](void *ptr) -> void {
+                uint32_t* buff_ptr = (uint32_t*)ptr;
+                delete buff_ptr;
+            });
+
+            delete BufferVect;
+
+            py::array_t<uint32_t> encoded_text_array(size,result_vector,encoded_capsule);
+            return encoded_text_array;
+
         } // encode 
 
         /**
@@ -283,6 +321,20 @@ namespace BPE
         */
         PYBIND11_NOINLINE virtual py::str decode(py::array_t<uint32_t> encoded_text)  const final  
         {
+             // Request a buffer info (safe access)
+            py::buffer_info buf = encoded_text.request();
+
+            // Sanity check
+            if (buf.ndim != 1)
+                throw std::runtime_error("Expected a 1D NumPy array");
+
+            // Create vector from buffer
+            uint32_t* ptr = static_cast<uint32_t*>(buf.ptr);
+            std::vector<uint32_t> encoded_vec(ptr, ptr + buf.shape[0]);
+
+            auto result_string = m_bpe_table.decode_token(encoded_vec);
+            return result_string;
+
         } // decode 
 
         /**
@@ -298,9 +350,24 @@ namespace BPE
 
         } // save 
 
-        PYBIND11_NOINLINE virtual void displayTable() const final  
+        /**
+        *   displayTable 
+        *       Prints the table to the standard output or given filename 
+        */
+        PYBIND11_NOINLINE virtual void displayTable(std::string_view file_name = "") const final  
         {
-            //m_bpe_table.printToken();
+            if(file_name == "") {
+                m_bpe_table.printToken();
+            } else {
+                std::ofstream fp_out(file_name.data());
+                if(!fp_out)
+                {
+                    Log(LOG_ERROR,"Object Does't Saved");
+                    Log(LOG_ERROR,"Can't Open File %s ",file_name.data());
+                    return ;
+                }
+                m_bpe_table.printToken(fp_out);
+            }
         } // displayTable 
 
     protected:
@@ -318,23 +385,15 @@ namespace BPE
             {
                 auto curr_word = from[i];
                 auto next_word = from[i + 1];
-
-                // calculating hash
-                auto tok_hash = Token::__hash__(curr_word, next_word);
-
-                // find the Token
-                auto token_it = m_bpe_table.m_token_map.find(tok_hash);
-
-                if (token_it == m_bpe_table.m_token_map.end()) // The Token Does not Present
+                
+                if (!(added_tok == std::pair{curr_word,next_word})) // The Token Does not Present
                 {
                     from[final_size++] = curr_word;
                     continue;
                 }
 
-                const auto [_, token_index] = *token_it;
+                auto token_index = added_tok.getId();
 
-                // check this token is the curr max token
-                if (token_index == added_tok.getId())
                 {
                     if (final_size > 0) // is there any token before
                     {
@@ -379,11 +438,7 @@ namespace BPE
                         }
                     }
                 }
-                else
-                {
-                    Log(LOG_ERROR, "Unreachable Code. If you Reached Here Somthing is Wrong with it.");
-                    from[final_size++] = token_index;
-                }
+                
                 // jump the next word
                 i += 1;
             }
@@ -405,9 +460,7 @@ namespace BPE
             for (auto &[k, v] : m_compiled_object)
             {
                 for (auto &[p1, p2] : *v)
-                {
                     delete p1;
-                }
                 delete v;
             }
             m_compiled_object.clear();
@@ -424,9 +477,6 @@ namespace BPE
         size_t m_vocab_size;
 
         const std::unordered_set<std::string> m_special_symbol = {
-            /**
-             * Use Somthing to Remove them
-             */
 
             // This Token will not merge
 
@@ -450,17 +500,6 @@ namespace BPE
 
             // padding for meeting the token count
             "<|padding|>",
-
-            // Repeat only for special char
-            "<|repeat-1|>",
-            "<|repeat-2|>",
-            "<|repeat-3|>",
-            "<|repeat-4|>",
-            "<|repeat-5|>",
-            "<|repeat-6|>",
-            "<|repeat-7|>",
-            "<|repeat-8|>",
-            "<|repeat-9|>",
 
         };
 
