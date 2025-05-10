@@ -1,14 +1,7 @@
 
-# include <BPE_Common.hpp>
-# include <sstream>
-/**
- * [x,y] -> one token
- * freq [x,y]
- * max of the freq
- * update the vocab <- new token
- */
-
-
+# include "BPE_Common.hpp"
+# include <ranges>
+# include <tuple>
 namespace BPE
 {
 
@@ -85,27 +78,26 @@ namespace BPE
         { 
             m_basic_tok_count = 0 ;
             m_basic_tok_count_end = false;
-            assert(tableSize > 0x100 && "Vocab size Must be Greater than 256 ");
+            
+            if(tableSize < 0x100)
+                throw py::value_error("vocab size Must be Greater than 256");
+
             m_tokens.reserve(tableSize);
         }
         ~BPE_Table() {}
 
         PYBIND11_NOINLINE virtual const Token& addToken(Token &tok) final 
         {
-            assert(m_tokens.size() < m_table_size && "Trying To Fit More than the allocated Size.");
             tok.m_id = m_tokens.size(); // set the token id
-
-            // As the New Tok Gen starts from 256
             m_token_map[tok.__hash__()] = m_tokens.size(); // update the map
-
             m_tokens.push_back(tok); // save the values
-
-            return m_tokens[m_tokens.size() - 1];
+            return m_tokens[m_tokens.size()- 1];
         }// addToken
 
         PYBIND11_NOINLINE virtual const Token& addBasicToken(char x) final 
         {
-            assert(!m_basic_tok_count_end && "Can't Insert an basic token after an compund token is inserted.");
+            if(m_basic_tok_count_end)
+                throw std::runtime_error("Can't Insert an basic token after an compund token is inserted.");
             Token basicTok(0,x);
             return m_basic_tok_count > 0x100 ? 
                     addToken(basicTok) :
@@ -194,9 +186,10 @@ namespace BPE
         PYBIND11_NOINLINE virtual void printToken(std::ostream &buff = std::cout) const final 
         {
             std::string Tok_str;
-            for (uint32_t i = 0; i < m_tokens.size(); i++)
+            size_t size = m_tokens.size();
+            for (int i : std::views::iota(1) | std::views::take(m_tokens.size()-1))
             {
-                auto &Tok = m_tokens[i];
+                auto &Tok = m_tokens.at(i);
                 char Buff[1024] = {0};
                 sprintf(Buff, "[%zu] => ", i);
 

@@ -6,7 +6,7 @@ Build/
 .vscode
 
 # enviroment 
-env/
+.venv/
 
 # dataset 
 # add this latter 

@@ -1,3 +1,3 @@
-__all__ = ['_core']
+__all__ = ['BPE']
 
-from . import _core
+from . import BPE
