@@ -13,9 +13,13 @@ PYBIND11_MODULE(_core, m) {
     m.doc() = "Example pybind11 plugin";
     pybind11::class_<BPE::PyBytePairEncoding>(m,"pyBytePairEncoding")
         .def(pybind11::init<py::int_,py::str>(),py::arg("vocabSize") , py::arg("pattern") = default_pattern )
-        .def("compile",&BPE::PyBytePairEncoding::compile)
-        .def("train",&BPE::PyBytePairEncoding::train)
-        .def("encode",&BPE::PyBytePairEncoding::encode)
-        .def("decode",&BPE::PyBytePairEncoding::decode)
-        .def("displayTable",&BPE::PyBytePairEncoding::displayTable , py::arg("file_name") = displayTable_default_out_file);
+        .def("_compile",&BPE::PyBytePairEncoding::compile)
+        .def("_train",&BPE::PyBytePairEncoding::train)
+        .def("_encode",&BPE::PyBytePairEncoding::encode)
+        .def("_decode",&BPE::PyBytePairEncoding::decode)
+        .def_property("_capacity",&BPE::PyBytePairEncoding::vocabCap,&BPE::PyBytePairEncoding::updateVocabCap)
+        .def_property_readonly("_size",&BPE::PyBytePairEncoding::vocabSize)
+        .def_property_readonly("_pattern",&BPE::PyBytePairEncoding::pattern)
+        .def_static("_fromJson",&BPE::LoadFromJson)
+        .def("_table",&BPE::PyBytePairEncoding::toDict);
 }

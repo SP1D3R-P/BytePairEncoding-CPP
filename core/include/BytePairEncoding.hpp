@@ -26,11 +26,12 @@ namespace BPE
     public:
         PYBIND11_NOINLINE PyBytePairEncoding(
             size_t vocabSize,
-            pybind11::str pattern = GPT4_PATTERN) __THROW
+            py::str pattern = GPT4_PATTERN) __THROW
             : m_bpe_table(vocabSize),
-              m_vocab_size(vocabSize)
+              m_vocab_size(vocabSize),
+              m_pattern(pattern)
         {
-            m_regex_module = pybind11::module_::import("regex");
+            m_regex_module = py::module_::import("regex"); /*if no regex found then throws error*/
             m_regex_pattern_compiled = m_regex_module.attr("compile")(pattern);
         }
 
@@ -52,7 +53,6 @@ namespace BPE
             py::list tokenize_words = m_regex_pattern_compiled.attr("findall")(inputString);
             uint32_t word_count /*number of word chunks*/ = py::len(tokenize_words);
                 
-            printf("len = %d",word_count);
             // create new sentence and revese the required amount of space
             sent_vect.reserve(word_count);
 
@@ -64,6 +64,7 @@ namespace BPE
                 
                 std::vector<uint32_t> buff(encoded_string.size());
                 std::ranges::copy(encoded_string.begin(),encoded_string.end(),buff.begin());
+                m_bpe_table.u8stream_valid_token(buff);
 
                 sent_vect.push_back({buff, buff.size()});
             }
@@ -90,7 +91,6 @@ namespace BPE
                     // Insert the Token and Calculate the Frequency
                     for (size_t i : std::views::iota(size_t(0), size - 1))
                         m_curr_token_map[BPE::Token{From[i], From[i + 1]}]++;
-                    
                 }
             }
 
@@ -100,8 +100,8 @@ namespace BPE
                 for (auto &[from, size] : vec)
                     encodeInplace(from, size, tok);
             };
-
-            for(auto epoch : std::views::iota(size_t(0)) | std::views::take(m_vocab_size - 0x100))
+            
+            for(;!m_bpe_table.isTableFull();) 
             {
                 /**
                  * Non-parallelizable work
@@ -121,7 +121,7 @@ namespace BPE
                 // Termination Condition
                 if (max_freq_fnum < 2)
                 {
-                    Log(LOG_WARN, "The Min frequency Has been Reached Terminating Training at %zu Epoch", epoch);
+                    Log(LOG_WARN, "The Min frequency Has been Reached Terminating Training at %zu Tokens", m_bpe_table.totalTokens());
                     break;
                 }
                 // New Added Token
@@ -166,7 +166,7 @@ namespace BPE
                 py::value_error("The size of the string must be greater than or equal to 2.");
 
             std::string_view encoded_string = input_string.attr("encode")("UTF8").cast<std::string_view>();
-                
+            
             std::vector<uint32_t> encoded_vect(encoded_string.size());
             std::ranges::copy(encoded_string.begin(),encoded_string.end(),encoded_vect.begin());
 
@@ -188,7 +188,7 @@ namespace BPE
          *   @param
          *       encoded_text : encoded string to convert
          */
-        PYBIND11_NOINLINE virtual py::str decode(py::array_t<uint32_t> encoded_text) const final
+        PYBIND11_NOINLINE virtual py::bytes decode(py::array_t<uint32_t> encoded_text) const final
         {
             // Request a buffer info (safe access)
             py::buffer_info buf = encoded_text.request();
@@ -201,48 +201,57 @@ namespace BPE
             uint32_t *ptr = static_cast<uint32_t *>(buf.ptr);
             std::vector<uint32_t> encoded_vec(ptr, ptr + buf.shape[0]);
 
-            auto result_string = m_bpe_table.decode_token(encoded_vec);
+            auto result_string = m_bpe_table.decodeToken(encoded_vec);
             return result_string;
 
         } // decode
 
         /**
-         *   save
-         *       Dumps the Table to the file for future reference
-         *   @param
-         *       dest : destiation file
+         *   toDict
+         *       Dumps the Table to to a py dictionary
          *   @returns
-         *       bool : if the file is saved or not
+         *       py::dict : dictionary of the objects
          */
-        PYBIND11_NOINLINE virtual bool save(py::str dest) const final
+        PYBIND11_NOINLINE virtual py::dict toDict() final
         {
-
-        } // save
-
+            return m_bpe_table.toDict();
+        } // toDict
+        
         /**
-         *   displayTable
-         *       Prints the table to the standard output or given filename
+         * pattern 
+         *      (Getter <= pattern) 
          */
-        PYBIND11_NOINLINE virtual void displayTable(std::string_view file_name = "") const final
-        {
-            if (file_name == "")
-            {
-                m_bpe_table.printToken();
-            }
-            else
-            {
-                std::ofstream fp_out(file_name.data());
-                if (!fp_out)
-                {
-                    Log(LOG_ERROR, "Object Does't Saved");
-                    Log(LOG_ERROR, "Can't Open File %s ", file_name.data());
-                    return;
-                }
-                m_bpe_table.printToken(fp_out);
-            }
-        } // displayTable
+        PYBIND11_NOINLINE virtual const py::str pattern() const final {
+            return m_pattern;
+        }
+        
+        /**
+         * vocabCap 
+         *      (Getter <= capacity) 
+         */
+        PYBIND11_NOINLINE virtual py::int_ vocabCap() const final {
+            return m_bpe_table.vocabCap();
+        }
+        
+        /**
+         * updateVocabCap 
+         *      (Setter => vocabCap [capacity]) 
+         */
+        PYBIND11_NOINLINE virtual void updateVocabCap(const py::int_ &new_size) final {
+            m_bpe_table.updateVocabCap(new_size);
+        }   
+        
+        /**
+         * vocabSize 
+         *      (Getter <= vocabSize) 
+         */
+        PYBIND11_NOINLINE virtual const py::int_ vocabSize() const final {
+            return m_bpe_table.currSize();
+        }
+
 
     protected:
+
         PYBIND11_NOINLINE virtual void encodeInplace(
             std::vector<uint32_t> &from,
             uint32_t &size,
@@ -328,6 +337,7 @@ namespace BPE
         BPE::BPE_Table m_bpe_table;
         BPE::Dictionary<BPE::Token, Freq_T> m_curr_token_map;
         std::mutex m_curr_token_mutex;
+        py::str m_pattern; 
 
         size_t m_vocab_size;
 
@@ -360,6 +370,11 @@ namespace BPE
 
         // const std::string GPT_STR = GPT4_PATTERN;
     };
+
+    
+    PYBIND11_NOINLINE PyBytePairEncoding LoadFromJson(py::dict data) noexcept(false)  {
+        throw std::runtime_error("Not Implemented");    
+    }
 
 }
 # endif // _BPE_H_

@@ -7,21 +7,11 @@ m.compile('/home/nandi/Desktop/BytePairEncoding/Corpus/TestData.en')
 m.train()
 print(ecoded:=m.encode("Hello world!!"))
 print(m.decode(ecoded))
-# m.displayTable("../Output/output.txt")
-# m.displayTable()
+print(m.vocab_capacity)
+m.vocab_capacity = 1000
+print(m.vocab_capacity)
+# d = m._toDict()
+# print(d)
 
-# import _core
-# m = _core.pyBytePairEncoding(500)
+m.save('../Output/output.json')
 
-# with open('/home/nandi/Desktop/BytePairEncoding/Corpus/Smalltext.en','r') as fp:
-#     m.compile(fp.read(),'D')
-# with open('/home/nandi/Desktop/BytePairEncoding/Corpus/TestData.en','r') as fp:
-#     m.compile(fp.read(),'C')
-# m.train()
-
-# encoded = m.encode("Hello world")
-# decoded = m.decode(encoded)
-# print(f'{encoded=} {decoded=}')
-
-
-# m.displayTable("../Output/output.txt")
